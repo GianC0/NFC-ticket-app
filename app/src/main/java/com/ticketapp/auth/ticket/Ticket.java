@@ -35,6 +35,19 @@ public class Ticket {
 
     private static String infoToShow = "-"; // Use this to show messages
 
+
+    // utility function for padding to 4-bytes-size messages
+    public byte[] ParseTo4Bytes(String text){
+        byte[] text_bytes = text.getBytes();
+        byte[] out = new byte[text_bytes.length + text_bytes.length%4];
+        for (int i=0; i<text_bytes.length; i++) {
+            out[i] = text_bytes[i];
+        }
+        return out;
+    }
+
+
+
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
         // Set HMAC key for the ticket
@@ -82,8 +95,13 @@ public class Ticket {
         }
 
         // Example of writing:
-        byte[] message = "info".getBytes();
-        res = utils.writePages(message, 0, 6, 1);
+
+        byte[] message = ParseTo4Bytes("Shuto's mum is a good woman");
+        utils.writePages(message, 0, 6, message.length/4);
+
+        //Counter writing
+        byte[] counter_increment = {(byte) 5,(byte) 0,(byte) 0, (byte) 0};
+        res = utils.writePages(counter_increment, 0, 41, 1);
 
         // Set information to show for the user
         if (res) {
@@ -113,7 +131,12 @@ public class Ticket {
 
         // Example of reading:
         byte[] message = new byte[4];
-        res = utils.readPages(6, 1, message, 0);
+        utils.readPages(6, 1, message, 0);
+
+
+        //Counter increment
+        byte[] counter_increment = {(byte) 1,(byte) 0,(byte) 0, (byte) 0};
+        res = utils.writePages(counter_increment, 0, 41, 1);
 
         // Set information to show for the user
         if (res) {
