@@ -22,7 +22,10 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
+import java.time.Instant;
 
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
 /**
  * TODO:
  * Complete the implementation of this class. Most of the code are already implemented. You will
@@ -78,6 +81,7 @@ public class Ticket {
 
 
     // -------------------- NEW FUNCTIONS-----------------
+    @androidx.annotation.Nullable
     public static byte[] keyGen (int length, String algo) {
         try{
             KeyGenerator generator = KeyGenerator.getInstance(algo);
@@ -131,6 +135,18 @@ public class Ticket {
         }
         return value;
     }
+
+    /** gets 4bytes array from integer */
+     public static byte[] IntToByte(int num){
+         byte[] byteArray = new byte[]{
+                 (byte) (num >> 24),
+                 (byte) (num >> 16),
+                 (byte) (num >> 8),
+                 (byte) num
+
+         };
+         return byteArray;
+     }
 
     /** merges byte arrays for final data */
     public static byte[] mergeData(byte[] hmacKey, byte[] exp_date, byte[] max_counter,byte[] init_counter, byte[] tag, byte[] vers){
@@ -268,6 +284,12 @@ public class Ticket {
     public boolean use() throws GeneralSecurityException {
         boolean res;
 
+        // Calculating Authentication Key
+        byte[] tmp = new byte[12];
+        utils.readPages(0,3,tmp,0);
+        byte[] UID = Arrays.copyOf(tmp,9);
+        byte[] authKey = getTruncatedSHA(concatByteArrays(authenticationMasterKey, UID));   // 16 bytes -> 4 pages
+
         // Authenticate
         res = utils.authenticate(authenticationMasterKey);
         if (!res) {
@@ -275,6 +297,28 @@ public class Ticket {
             infoToShow = "Authentication failed";
             return false;
         }
+
+        // hmacKey calculation
+        byte[] hmacKey = getTruncatedSHA(concatByteArrays(hmacMasterKey, UID));
+
+        // Reading Expiry date
+        byte[] expiryDate = new byte[4];
+        res = utils.readPages(6, 1, message, 0);
+
+        // Calculating the expiry date
+        int expiryUnixTime = (int)(System.currentTimeMillis() / 1000) + ByteBuffer.wrap();
+        byte[]  = new byte[]{
+                (byte) (ut1 >> 24),
+                (byte) (ut1 >> 16),
+                (byte) (ut1 >> 8),
+                (byte) ut1
+
+        };
+
+        ByteBuffer wrapped = ByteBuffer.wrap(validationDate); // big-endian by default
+        int num = wrapped.getInt(); // 1
+        System.out.println(validationDate[1]);
+        System.out.println(num);
 
         // Example of reading:
         byte[] message = new byte[4];
