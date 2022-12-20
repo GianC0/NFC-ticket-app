@@ -130,7 +130,7 @@ public class Ticket {
         for(byte[] arg: args){
             tot_length+=arg.length;
         }
-        byte[] out = new byte[tot_length];
+        byte[] out = new byte[0];
         for (byte[] arg: args)
             out = concatByteArrays(out,arg);
         return out;
@@ -151,12 +151,28 @@ public class Ticket {
 
     }
 
+    public byte[] invertArray(byte[] array){
+        byte[] out = new byte[array.length];
+        for(int i=array.length-1;i>=0;i--){
+            out[array.length-i-1] = array[i];
+        }
+        return out;
+    }
+
+    public byte[] getCounter(){
+        byte[] counter = new byte[4];
+        utils.readPages(41,1,counter,0);
+        counter = Arrays.copyOf(counter,2);
+        return invertArray(counter);
+    }
 
     // ------------------------------------------------------
 
     /** Change these according to your design. Diversify the keys. */
     private static final byte[] authenticationMasterKey = TicketActivity.outer.getString(R.string.authenticationMasterKey).getBytes(); // 16-byte key
     private static final byte[] hmacMasterKey = TicketActivity.outer.getString(R.string.hmacMasterKey).getBytes();; // 16-byte key
+    private static final byte[] defaultAuthKey = TicketActivity.outer.getString(R.string.default_auth_key).getBytes(); // 16-byte key
+    private static final byte[] defaultHmacKey = TicketActivity.outer.getString(R.string.default_hmac_key).getBytes();; // 16-byte key
 
 
 
@@ -173,9 +189,7 @@ public class Ticket {
         byte[] expiryTime = Arrays.copyOfRange(block,7*4,8*4);
         byte[] expiryTime_hmac = Arrays.copyOfRange(block,8*4,9*4);
         byte[] validationTime = Arrays.copyOfRange(block,9*4,10*4);
-        byte[] counter = new byte[4];
-        utils.readPages(41,1,counter,0);
-        counter = Arrays.copyOf(counter,2);
+        byte[] counter = getCounter();
 
 
 
@@ -188,12 +202,11 @@ public class Ticket {
 
 
         // parsing data
-        byte[] issueTime = Arrays.copyOf(data,4);
+        byte[] issueTime = Arrays.copyOfRange(data,0,1*4);
         byte[] counter_max_value = Arrays.copyOfRange(data,2*4,3*4);
         byte[] counter_initial_value = Arrays.copyOfRange(data,3*4,4*4);
         byte[] app_tag = Arrays.copyOfRange(data,4*4,5*4);
         byte[] version = Arrays.copyOfRange(data,5*4,6*4);
-        byte[] uses_bytes = Arrays.copyOfRange(IntToBytes(uses),2,6);
 
         // checks on counter
         if (BytesToInt(counter)> BytesToInt(counter_max_value) || BytesToInt(counter)< BytesToInt(counter_initial_value)){
@@ -201,7 +214,7 @@ public class Ticket {
             Utilities.log("Error on counter value: not in correct range",true);
             return false;
         }
-        if (BytesToInt(counter)+uses>65535){
+        if (BytesToInt(counter_max_value)+uses>65535){
 
             // invalidating card by setting OTP=1
             utils.writePages(IntToBytes(1),0,3,1);
@@ -209,7 +222,7 @@ public class Ticket {
             Utilities.log(infoToShow,true);
             return false;
         }
-        if (BytesToInt(counter_max_value)- BytesToInt(counter_initial_value) + uses > 20){
+        if ( BytesToInt(counter_max_value) - BytesToInt(counter_initial_value) + uses > 20){
             infoToShow = "Max n° of rides reached: keep using the card";
             Utilities.log(infoToShow,true);
             return false;
@@ -218,14 +231,21 @@ public class Ticket {
 
 
         // extending max value for counter and expiry date
-        counter_max_value = IntToBytes(BytesToInt(counter_max_value)+ BytesToInt(uses_bytes));
+        counter_max_value = IntToBytes(BytesToInt(counter_max_value)+ uses);
         data = mergeData(issueTime, IntToBytes(minutesValid),counter_max_value,counter_initial_value, app_tag, version );
-        expiryTime = IntToBytes(BytesToInt(expiryTime)+minutesValid);
+
+
+        if (BytesToInt(expiryTime)!=0){
+            // extending expiration time
+            expiryTime = IntToBytes(BytesToInt(expiryTime)+minutesValid);
+        }
 
         //HMAC calculation
         macAlgorithm.setKey(hmacKey);
         data_hmac = macAlgorithm.generateMac(data);
         expiryTime_hmac = macAlgorithm.generateMac(expiryTime);
+
+
 
         // writing new block in memory
         if (utils.eraseMemory()){
@@ -239,7 +259,16 @@ public class Ticket {
 
         }
 
-        infoToShow = "Card was not expired. TOT rides: "+ (BytesToInt(counter_max_value)-BytesToInt(counter_initial_value)+uses) +".\nNew Expiration: "+(new java.util.Date((long) BytesToInt(expiryTime)*60000));
+        // setting info to show according to card validation status
+        if (BytesToInt(expiryTime)!=0 && BytesToInt(counter_initial_value)!=BytesToInt(counter)){
+            infoToShow = "Card was not expired."
+                    + "\nTOT rides: "+ (BytesToInt(counter_max_value) - BytesToInt(counter))
+                    + "\nNew Expiration:\n"+(new java.util.Date((long) BytesToInt(expiryTime)*60000));
+        }else {
+            infoToShow = "Validate card to start using tickets"
+                    + "\nTOT rides: "+ (BytesToInt(counter_max_value) - BytesToInt(counter_initial_value))
+                    + "\nNew Expiration: N/A";
+        }
         return true;
     }
 
@@ -247,15 +276,13 @@ public class Ticket {
         // writing new block in memory
         if (utils.eraseMemory()){
             byte[] issueTime = IntToBytes((int) System.currentTimeMillis()/60000);
-            byte[] counter = new byte[4];
-            utils.readPages(41,1,counter,0);
-            counter = Arrays.copyOf(counter,2);
-            byte[] counter_max_value = IntToBytes(BytesToInt(counter)+uses);
+            byte[] counter = getCounter();
+            int counter_max_value = BytesToInt(counter)+ uses;
             byte[] app_tag = "TEST".getBytes();
             byte[] version = {(byte) 0,(byte) 0,(byte) 0,(byte) 1};
 
             // counter max value check
-            if (BytesToInt(counter)+uses>65535){
+            if (counter_max_value>65535){
 
                 // invalidating card by setting OTP=1
                 utils.writePages(IntToBytes(1),0,3,1);
@@ -265,20 +292,22 @@ public class Ticket {
             }
 
             // generating data
-            byte[] data = mergeData(issueTime, IntToBytes(minutesValid),counter_max_value,counter, app_tag, version );
+            byte[] data = mergeData(issueTime, IntToBytes(minutesValid),IntToBytes(counter_max_value),IntToBytes(BytesToInt(counter)), app_tag, version );
+            byte[] initial_expiryTime = {(byte) 0,(byte) 0,(byte) 0,(byte) 0};   // flag for the issueNotExpiredTicket()
 
-            // generating HMAC
+            // generating HMACs
             macAlgorithm.setKey(hmacKey);
             byte[] data_hmac = macAlgorithm.generateMac(data);
+            byte[] initial_expiryTime_hmac = macAlgorithm.generateMac(initial_expiryTime);
 
             // writing block on the card
-            byte[] block = mergeData(data,data_hmac);
-            utils.writePages(block,0,4,7);
+            byte[] block = mergeData(data,data_hmac,initial_expiryTime,initial_expiryTime_hmac);
+            utils.writePages(block,0,4,9);
 
 
             if (isNew){
                 // AUTH0 and AUTH1
-                byte[] AUTH0 = {(byte) 3,(byte) 0,(byte) 0,(byte) 0};
+                byte[] AUTH0 = {(byte) 48,(byte) 0,(byte) 0,(byte) 0};
                 byte[] AUTH1 = {(byte) 0,(byte) 0,(byte) 0,(byte) 0};
                 utils.writePages(AUTH0, 0, 42, 1);
                 utils.writePages(AUTH1, 0, 43, 1);
@@ -290,6 +319,7 @@ public class Ticket {
             }
 
             infoToShow = "New ticket issued. Total rides: "+uses;
+            Utilities.log(new String(block),false);
             return true;
         }
         else{
@@ -302,18 +332,22 @@ public class Ticket {
 
     public boolean issue(int minutesValid, int uses) throws GeneralSecurityException {
         boolean res;
+        boolean def_auth;
         boolean isNew;
 
         // keys generation and authenticating
         byte[] card_UID = getUID();
         byte[] authKey = getTruncatedSHA(concatByteArrays(authenticationMasterKey, card_UID));
         byte[] hmacKey = getTruncatedSHA(concatByteArrays(hmacMasterKey, card_UID));
-        res = utils.authenticate(authKey);
 
-        if (!res) {
-            Utilities.log("Authentication failed in issue()", true);
-            infoToShow = "Authentication failed";
-            return false;
+        def_auth = utils.authenticate(defaultAuthKey);
+        if(!def_auth) {
+            res = utils.authenticate(authKey);
+            if (!res) {
+                Utilities.log("Authentication failed in issue()", true);
+                infoToShow = "Authentication failed";
+                return false;
+            }
         }
         byte[] block = new byte[10*4];
         utils.readPages(4,10,block,0);
@@ -340,7 +374,7 @@ public class Ticket {
         byte[] OTP = new byte[4];
         utils.readPages(3,1,OTP,0);
 
-        isNew = Arrays.equals(block,new byte[10*4]);
+        isNew = Arrays.equals(block,new byte[10*4]) || def_auth;
         int expiryTime = BytesToInt(Arrays.copyOfRange(block,7*4,8*4));
 
         //OTP CHECK
@@ -350,9 +384,11 @@ public class Ticket {
         }
 
         // NOT EXPIRED
-        if (!isNew && expiryTime>System.currentTimeMillis()/60000) {
+        if (!isNew && (expiryTime>Math.toIntExact(System.currentTimeMillis()/60000L) || expiryTime==0)) {
             return issueNotExpiredTicket(block, hmacKey, uses, minutesValid);
         }
+
+        // NEVER VALIDATED THE 1st TIME
 
         // EXPIRED OR NEW
         return issueNewTicket(authKey,hmacKey,uses,minutesValid,isNew);
@@ -381,6 +417,9 @@ public class Ticket {
         }
 
         // getting OTP, block and counter values
+        byte[] tmp = new byte[39*4];
+        utils.readPages(3,39,tmp,0);
+        /*
         byte[] OTP = new byte[4];
         utils.readPages(3,1,OTP,0);
 
@@ -390,6 +429,10 @@ public class Ticket {
         byte[] counter = new byte[4];
         utils.readPages(41,1,counter,0);
         counter = Arrays.copyOf(counter,2);
+         */
+        byte[] OTP = Arrays.copyOfRange(tmp,0,1*4);
+        byte[] block = Arrays.copyOfRange(tmp,1*4,10*4);
+        byte[] counter = invertArray(Arrays.copyOfRange(tmp,38*4,38*4+2)); // only 2 bytes
 
 
         //OTP check
@@ -405,10 +448,11 @@ public class Ticket {
         byte[] expiryTime = Arrays.copyOfRange(block,7*4,8*4);
         byte[] expiryTime_hmac = Arrays.copyOfRange(block,8*4,9*4);
         byte[] validationTime = Arrays.copyOfRange(block,9*4,10*4);
-        byte[] issueTime = Arrays.copyOf(data,4);
+        byte[] issueTime = Arrays.copyOfRange(data,0,1*4);
         byte[] minutesValid = Arrays.copyOfRange(data,1*4,2*4);
         byte[] counter_max_value = Arrays.copyOfRange(data,2*4,3*4);
         byte[] counter_initial_value = Arrays.copyOfRange(data,3*4,4*4);
+        byte[] i = {(byte) 1, (byte) 0, (byte) 0, (byte) 0};           // counter increment definition
 
 
 
@@ -419,8 +463,8 @@ public class Ticket {
             return false;
         }
 
-        // check HMAC of data
-        if(!HMACver(data,data_hmac,hmacKey)){
+        // check HMAC of data and expiryTime
+        if(!HMACver(data,data_hmac,hmacKey) || !HMACver(expiryTime,expiryTime_hmac,hmacKey)){
             Utilities.log("DATA HMAC error in use()", true);
             infoToShow = "DATA HMAC error: probable data corruption";
             return false;
@@ -436,7 +480,6 @@ public class Ticket {
             infoToShow = "No more rides available!";
             return false;
         }
-        byte[] i = {(byte) 0, (byte) 0, (byte) 0, (byte) 1};           // counter increment definition
 
         /** VALIDATIONS */
         // 1st
@@ -444,58 +487,65 @@ public class Ticket {
 
             // calculating all variables
 
-            validationTime = IntToBytes((int) System.currentTimeMillis()/60000);
+            validationTime = IntToBytes(Math.toIntExact(System.currentTimeMillis()/60000));
             expiryTime = IntToBytes(BytesToInt(validationTime) + BytesToInt(minutesValid));
             expiryTime_hmac = macAlgorithm.generateMac(expiryTime);
 
             /** ATOMIC WRITE OPERATIONS*/
 
-            utils.writePages(expiryTime,0,11,1);        // expiryTime
-            utils.writePages(expiryTime_hmac,0,12,1);   // expiryTime HMAC
-            utils.writePages(i,0,43,1);                 // increment counter --> COMMIT
+            boolean w1 = utils.writePages(expiryTime,0,11,1);       // expiryTime
+            boolean w2 = utils.writePages(expiryTime_hmac,0,12,1);   // expiryTime HMAC
+            boolean w3 = utils.writePages(i,0,41,1);                 // increment counter --> COMMIT
+            Utilities.log("w2: "+ w2,false);
+            Utilities.log("w1: "+ w1,false);
+            Utilities.log("w3: "+ w3,false);
 
             //---------- VALIDATION TIME LOG------------
             utils.writePages(validationTime,0,13,1);    // NO INTEGRITY PROTECTION
             //------------------------------------------
 
+
             // update ticket status on app
-            utils.readPages(41,1,counter,0);
-            counter = Arrays.copyOf(counter,2);
-            remainingUses = BytesToInt(counter_max_value) - BytesToInt(counter);
+            remainingUses = BytesToInt(counter_max_value) - BytesToInt(counter_initial_value) -1;
             expiryT = BytesToInt(expiryTime);
             isValid = true;
-            infoToShow = "First Validation. Total rides: "+ (BytesToInt(counter_max_value) - BytesToInt(counter_initial_value)) + "\n"+(new java.util.Date((long) BytesToInt(validationTime)*60000));
+            infoToShow = "First Validation. Total rides: "+ remainingUses
+                    + "\nExpiry:\n"+(new java.util.Date((long) BytesToInt(expiryTime)*60000));
             return true;
         }
 
         // other validations
         else {
 
-            // check on expiryTime integrity
-            if (!HMACver(expiryTime,expiryTime_hmac,hmacKey)){
-                infoToShow = "Expiration date not valid: possible rollback attack";
+            long currentTime = System.currentTimeMillis()/1000;
+
+            // expiration check
+            if (currentTime > BytesToInt(expiryTime)*60L){
+                infoToShow = "Ticket expired. Re-issuing needed.";
                 return false;
             }
 
-
             // pass-back protection (6sec)
-            if (System.currentTimeMillis()/1000 - BytesToInt(validationTime)* 60L < 6){
+            if (currentTime - BytesToInt(validationTime)* 60L < 6){
                 infoToShow = "Ticket was already validated less than 6 sec ago.";
                 return false;
             }
 
-            utils.writePages(i, 0, 43, 1);                 // increment counter --> COMMIT
+            // setting new validation time to current time
+            validationTime = IntToBytes(Math.toIntExact(currentTime/60L));
+
+
+            /** ATOMIC OPERATIONS */
+            utils.writePages(i, 0, 41, 1);                 // increment counter --> COMMIT
             //--------------------VALIDATION LOG--------------------------
             utils.writePages(validationTime, 0, 13, 1);    // NO INTEGRITY PROTECTION}
             //------------------------------------------------------------
 
             // update ticket status on app
-            utils.readPages(41,1,counter,0);
-            counter = Arrays.copyOf(counter,2);
-            remainingUses = BytesToInt(counter_max_value) - BytesToInt(counter);
+            remainingUses =  BytesToInt(counter_max_value) - BytesToInt(counter) -1;
             expiryT = BytesToInt(expiryTime);
             isValid = true;
-            infoToShow = "Successful validation. Total rides: "+ remainingUses + "\n"+(new java.util.Date((long) BytesToInt(validationTime)*60000));
+            infoToShow = "Successful validation. Total rides: "+ remainingUses + "\nTimestamp:\n"+(new java.util.Date( BytesToInt(validationTime)*60000L));
             return true;
         }
     }
