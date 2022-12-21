@@ -33,6 +33,8 @@ public class Ticket {
     private Boolean isValid = false;
     private int remainingUses = 0;
     private int expiryT = 0;
+    private byte[] lastCardUID;
+    private long lastCardTimestamp;
 
 
     private static String infoToShow = "-"; // Use this to show messages
@@ -307,7 +309,8 @@ public class Ticket {
 
             if (isNew){
                 // AUTH0 and AUTH1
-                byte[] AUTH0 = {(byte) 48,(byte) 0,(byte) 0,(byte) 0};
+                //byte[] AUTH0 = {(byte) 48,(byte) 0,(byte) 0,(byte) 0};
+                byte[] AUTH0 = {(byte) 3,(byte) 0,(byte) 0,(byte) 0};
                 byte[] AUTH1 = {(byte) 0,(byte) 0,(byte) 0,(byte) 0};
                 utils.writePages(AUTH0, 0, 42, 1);
                 utils.writePages(AUTH1, 0, 43, 1);
@@ -419,17 +422,7 @@ public class Ticket {
         // getting OTP, block and counter values
         byte[] tmp = new byte[39*4];
         utils.readPages(3,39,tmp,0);
-        /*
-        byte[] OTP = new byte[4];
-        utils.readPages(3,1,OTP,0);
 
-        byte[] block = new byte[10*4];
-        utils.readPages(4,10,block,0);
-
-        byte[] counter = new byte[4];
-        utils.readPages(41,1,counter,0);
-        counter = Arrays.copyOf(counter,2);
-         */
         byte[] OTP = Arrays.copyOfRange(tmp,0,1*4);
         byte[] block = Arrays.copyOfRange(tmp,1*4,10*4);
         byte[] counter = invertArray(Arrays.copyOfRange(tmp,38*4,38*4+2)); // only 2 bytes
@@ -477,9 +470,18 @@ public class Ticket {
             return false;
         }
         if (BytesToInt(counter)==BytesToInt(counter_max_value)){
+            utils.eraseMemory();
             infoToShow = "No more rides available!";
             return false;
         }
+
+        // double tap protection:  3sec
+        if (Arrays.equals(card_UID,lastCardUID) && lastCardTimestamp+3>=(System.currentTimeMillis()/1000)) {
+            infoToShow = "Card already validated (<3sec ago)";
+            lastCardTimestamp = System.currentTimeMillis()/1000;
+            return false;
+        }
+
 
         /** VALIDATIONS */
         // 1st
@@ -496,8 +498,8 @@ public class Ticket {
             boolean w1 = utils.writePages(expiryTime,0,11,1);       // expiryTime
             boolean w2 = utils.writePages(expiryTime_hmac,0,12,1);   // expiryTime HMAC
             boolean w3 = utils.writePages(i,0,41,1);                 // increment counter --> COMMIT
-            Utilities.log("w2: "+ w2,false);
             Utilities.log("w1: "+ w1,false);
+            Utilities.log("w2: "+ w2,false);
             Utilities.log("w3: "+ w3,false);
 
             //---------- VALIDATION TIME LOG------------
@@ -511,6 +513,8 @@ public class Ticket {
             isValid = true;
             infoToShow = "First Validation. Total rides: "+ remainingUses
                     + "\nExpiry:\n"+(new java.util.Date((long) BytesToInt(expiryTime)*60000));
+            lastCardUID = card_UID;
+            lastCardTimestamp = System.currentTimeMillis()/1000;
             return true;
         }
 
@@ -546,6 +550,8 @@ public class Ticket {
             expiryT = BytesToInt(expiryTime);
             isValid = true;
             infoToShow = "Successful validation. Total rides: "+ remainingUses + "\nTimestamp:\n"+(new java.util.Date( BytesToInt(validationTime)*60000L));
+            lastCardUID = card_UID;
+            lastCardTimestamp = System.currentTimeMillis()/1000;
             return true;
         }
     }
